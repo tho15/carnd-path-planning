@@ -110,6 +110,31 @@ vector<double> JMT(vector< double> start, vector <double> end, double T)
     return {start[0],start[1],start[2]/2.0,x[0],x[1],x[2]};
 }
 
+void max_jmt_acc_jerk(vector<double> r, double dt, double &max_acc, double &max_jerk)
+{
+	double ts = 1.0/dt;
+	
+	double t_am1 = (-24.0*r[4]+sqrt(pow(24*r[4], 2) - 4*6*r[3]*60*r[5]))/(2*60*r[5]);
+	double t_am2 = (-24.0*r[4]-sqrt(pow(24*r[4], 2) - 4*6*r[3]*60*r[5]))/(2*60*r[5]);
+	//cout << "max acc at: " << t_am1 << " " << t_am2 << endl;
+	
+	double max_a1 = 2*r[2]+6*r[3]*t_am1+12*r[4]*pow(t_am1, 2)+20*r[5]*pow(t_am1, 3);
+	max_a1 = max_a1*ts*ts;	
+	double max_a2 = 2*r[2]+6*r[3]*t_am2+12*r[4]*pow(t_am2, 2)+20*r[5]*pow(t_am2, 3);
+	max_a2 = max_a2*ts*ts;
+	cout << "calculated max acc: " << max_a1 << " " << max_a2 << endl;
+	max_acc = max_a1;
+	if(fabs(max_a2) > fabs(max_a1)) {
+		max_acc = max_a2;
+	}
+	
+	double t_jm = -0.2*r[4]/r[5]; 
+	//cout << "max jerk at: " << t_jm << endl;
+	max_jerk = 6*r[3]+24*r[4]*t_jm+60*r[5]*t_jm*t_jm;
+	max_jerk = max_jerk*pow(ts, 3);
+	cout << "calculated max jert: " << max_jerk << endl;
+}
+
 double quintic_eval_s(vector<double> p, double t)
 {
 	return p[0]+p[1]*t+p[2]*pow(t,2)+p[3]*pow(t,3)+p[4]*pow(t,4)+p[5]*pow(t,5);
@@ -800,6 +825,8 @@ void jmt_trajectory(
 	auto jmt_s_params = JMT(s_start, s_goal, num_steps);
 	auto jmt_d_params = JMT(d_start, d_goal, num_steps);
 	
+	double max_acc, max_jerk;
+	max_jmt_acc_jerk(jmt_s_params, 0.02, max_acc, max_jerk);
 	//cout << "jmt values s: " << num_steps << " " << next_x.size() << " " << next_y.size() << endl;
 	//cout << "jmt eval d: ";
 	dump_vector(jmt_d_params);
@@ -1043,14 +1070,14 @@ int main() {
           	auto sensor_fusion = j[1]["sensor_fusion"];
           	
           	cars.clear();
-          	cout << "cars on road: " << endl;
+          	//cout << "cars on road: " << endl;
           	for(int i = 0; i < sensor_fusion.size(); ++i) {
           		Car car(sensor_fusion[i][0], sensor_fusion[i][1], sensor_fusion[i][2], sensor_fusion[i][3], sensor_fusion[i][4],
           			    sensor_fusion[i][5], sensor_fusion[i][6]);
           		cars.push_back(car);
-          		car.print();
+          		//car.print();
           	}
-          	cout << endl;
+          	//cout << endl;
 
           	json msgJson;
 
@@ -1064,7 +1091,8 @@ int main() {
 				double td;
 				CAR_STATE = { _CS_KL, get_lane_num(car_d, td) };
 				vector<double> car_state = {car_s, 0, 0, car_d, 0, 0};
-				jmt_trajectory_kl(car_state, num_traj_steps, next_x_vals, next_y_vals, prev_sdva);
+				//jmt_trajectory_kl(car_state, num_traj_steps, next_x_vals, next_y_vals, prev_sdva);
+				jmt_trajectory(car_state, cars, num_traj_steps, next_x_vals, next_y_vals, prev_sdva);
 			} else {
 				int closing_car = get_closing_car_ahead(cars, car_s, car_d, 25);
 				
@@ -1083,7 +1111,7 @@ int main() {
 					prev_sdva.clear();
 					jmt_trajectory(car_state, cars, num_traj_steps, next_x_vals, next_y_vals, prev_sdva);
 					
-					//smooth_path_with_prev( previous_path_x, previous_path_y, next_x_vals, next_y_vals);
+					smooth_path_with_prev( previous_path_x, previous_path_y, next_x_vals, next_y_vals);
 							
 				} else {
 					cout << "continue the trajectory" << endl;
