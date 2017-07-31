@@ -593,7 +593,8 @@ bool safe_to_left_lane(const vector<Car> &cars, double car_d, double car_s)
 		return false;  // can't go left
 	
 	// if there is no car in 10 meters ahead and following, saft to change lane
-	auto left_cars = get_cars_in_lane_segment(cars, car_s, car_d-4.0, 10);
+	auto left_cars = get_cars_in_lane_segment(cars, car_s, car_d-4.0, 20);
+	cout << "left cars found: " << left_cars.size() << endl;
 	return left_cars.empty();
 }
 
@@ -605,7 +606,8 @@ bool safe_to_right_lane(const vector<Car> &cars, double car_d, double car_s)
 		return false;  // can't go left
 	
 	// if there is no car in 10 meters ahead and following, saft to change lane
-	auto left_cars = get_cars_in_lane_segment(cars, car_s, car_d+4.0, 10);
+	auto left_cars = get_cars_in_lane_segment(cars, car_s, car_d+4.0, 20);
+	cout << "right cars found: " << left_cars.size() << endl;
 	return left_cars.empty();
 }
 
@@ -745,7 +747,7 @@ void jmt_trajectory(
 	vector<double> d_goal = {goal_d, 0, 0};
 	
 	// TODO: based on cost function
-	int closing_car = get_closing_car_ahead(cars, car_state[3], car_state[0], 20);
+	int closing_car = get_closing_car_ahead(cars, car_state[3], car_state[0], 25);
 	
 	if(CAR_STATE[0] == _CS_LCL) {
 		double td; 
@@ -753,10 +755,10 @@ void jmt_trajectory(
 			cout << "change LCL to KL state" << endl;
 			CAR_STATE[0] = _CS_KL;
 		} else {
-			cout << "keeping in left lane change state!" << endl;
+			cout << "keeping in lane change state!" << endl;
 			d_goal[0] = CAR_STATE[1]*4.0 + 2.0;
 		}
-	} else if(CAR_STATE[0] == _CS_LCL) {
+	} else if(CAR_STATE[0] == _CS_LCR) {
 		double td; 
 		if(get_lane_num(car_state[3], td) == CAR_STATE[1]) {
 			cout << "change LCR to KL state" << endl;
@@ -777,13 +779,16 @@ void jmt_trajectory(
     	else if(safe_to_right_lane(cars, car_state[3], car_state[0])) {
     		cout << "now changing to right lane!" << endl;
     		d_goal[0] += 4.0;
-    		CAR_STATE[0] = _CS_LCL;
+    		CAR_STATE[0] = _CS_LCR;
     		CAR_STATE[1] = get_lane_num(d_goal[0], td);
     	} else {
      		cout << "following car ahead: " << endl;
     		cars[closing_car].print();
-    		s_goal[0] = s_start[0] + cars[closing_car].get_car_vel()*num_steps - 4;
+    		s_goal[0] = s_start[0] + cars[closing_car].get_car_vel()*num_steps - 7.5;
 		}   	
+    }
+    else {
+    	cout << "nothing changed, keep going!" << endl;
     }
 	// end of TODO
 	
@@ -796,7 +801,7 @@ void jmt_trajectory(
 	auto jmt_d_params = JMT(d_start, d_goal, num_steps);
 	
 	//cout << "jmt values s: " << num_steps << " " << next_x.size() << " " << next_y.size() << endl;
-	cout << "jmt eval d: ";
+	//cout << "jmt eval d: ";
 	dump_vector(jmt_d_params);
 	double previous_s = 0;
 	for(int t = 0; t < num_steps; ++t) {
@@ -808,7 +813,7 @@ void jmt_trajectory(
 		double d   = quintic_eval_s(jmt_d_params, t);
 		double d_v = quintic_eval_d(jmt_d_params, t);
 		double d_a = quintic_eval_a(jmt_d_params, t);
-		cout << d << " ";
+		//cout << d << " ";
 		
 		if(t > 0 && (s - previous_s) > max_dist_per_step) {
 			s = previous_s + max_dist_per_step;
@@ -826,7 +831,7 @@ void jmt_trajectory(
 		if(s > max_s) s -= max_s;
 		next_sva.push_back({s, s_v, s_a, d, d_v, d_a, xy[0], xy[1]});
 	}
-	cout << endl;
+	//cout << endl;
 }
 
 
@@ -1038,11 +1043,14 @@ int main() {
           	auto sensor_fusion = j[1]["sensor_fusion"];
           	
           	cars.clear();
+          	cout << "cars on road: " << endl;
           	for(int i = 0; i < sensor_fusion.size(); ++i) {
           		Car car(sensor_fusion[i][0], sensor_fusion[i][1], sensor_fusion[i][2], sensor_fusion[i][3], sensor_fusion[i][4],
           			    sensor_fusion[i][5], sensor_fusion[i][6]);
           		cars.push_back(car);
+          		car.print();
           	}
+          	cout << endl;
 
           	json msgJson;
 
@@ -1058,9 +1066,12 @@ int main() {
 				vector<double> car_state = {car_s, 0, 0, car_d, 0, 0};
 				jmt_trajectory_kl(car_state, num_traj_steps, next_x_vals, next_y_vals, prev_sdva);
 			} else {
+				int closing_car = get_closing_car_ahead(cars, car_s, car_d, 25);
+				
 				int idx = prev_sdva.size() - previous_path_x.size();
-				 
-				if(idx > 50) {
+				
+				cout << "idx: " << idx << " closing car: " << closing_car << endl;
+				if(idx > 50 || closing_car > 0) {
 																		
 					vector<double> car_state = {prev_sdva[idx][0], prev_sdva[idx][1], prev_sdva[idx][2], prev_sdva[idx][3], prev_sdva[idx][4], prev_sdva[idx][5]};
 					
