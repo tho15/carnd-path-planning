@@ -34,6 +34,7 @@ vector<double> map_waypoints_fit_y;
 
 enum {
 	_CS_KL,
+	_CS_KL_FL,
 	_CS_LCL,
 	_CS_LCR
 };
@@ -41,6 +42,7 @@ enum {
 vector<int>  CAR_STATE;  // { state, target lane }
 
 double max_s = 6945.554;
+#define SPEED_LIMIT 50   // speed limit is 50MPH
   
 // For converting back and forth between radians and degrees.
 constexpr double pi() { return M_PI; }
@@ -123,15 +125,15 @@ void max_jmt_acc_jerk(vector<double> r, double dt, double &max_acc, double &max_
 	double max_a2 = 2*r[2]+6*r[3]*t_am2+12*r[4]*pow(t_am2, 2)+20*r[5]*pow(t_am2, 3);
 	max_a2 = max_a2*ts*ts;
 	cout << "calculated max acc: " << max_a1 << " " << max_a2 << endl;
-	max_acc = max_a1;
+	max_acc = fabs(max_a1);
 	if(fabs(max_a2) > fabs(max_a1)) {
-		max_acc = max_a2;
+		max_acc = fabs(max_a2);
 	}
 	
 	double t_jm = -0.2*r[4]/r[5]; 
 	//cout << "max jerk at: " << t_jm << endl;
 	max_jerk = 6*r[3]+24*r[4]*t_jm+60*r[5]*t_jm*t_jm;
-	max_jerk = max_jerk*pow(ts, 3);
+	max_jerk = fabs(max_jerk*pow(ts, 3));
 	cout << "calculated max jert: " << max_jerk << endl;
 }
 
@@ -560,9 +562,12 @@ int get_closing_car_ahead(const vector<Car> & cars, double car_d, double car_s, 
 	int cid = -1;
 	double min_ds = check_dist;
 	
+	cout << "gcca: my car: " << car_s << " " << car_d << " " << check_dist << " " << cars.size() << endl;
 	for(int i = 0; i < nc; ++i) {
 		if(get_lane_num(car_d, td) != get_lane_num(cars[i].car_d, td)) continue;
 		
+		//cout << "gcca: checking car " << cars[i].car_id << " ";
+		//cars[i].print();
 		double d = cars[i].car_s - car_s;
 		if(d < 0 && (car_s + check_dist) > max_s) {
 			double ds = car_s + check_dist - max_s;
@@ -570,9 +575,11 @@ int get_closing_car_ahead(const vector<Car> & cars, double car_d, double car_s, 
 				min_ds = cars[i].car_s + max_s - car_s;
 				cid = i;
 			}
+			//cout << "gcca d<0: " << d << " " << ds << " " << min_ds << " " << cid << endl;
 		} else if( d > 0 && d < min_ds ) {
 			min_ds = d;
 			cid = i;
+			//cout << "gcca d > 0 " << d << " " << cid << " " << min_ds << endl;
 		}
 	}
 	return cid;
@@ -722,15 +729,19 @@ void jmt_trajectory_kl(
 }
 
 // car_start is vector of {car_s, car_speed, car_a, car_d, car_d_speed, car_d_a}
-void jmt_trajectory(
+int jmt_trajectory(
 	const vector<double> &car_state,
 	const vector<Car> &cars,
+	const int closing_car,
 	int num_steps,
 	vector<double> &next_x,
 	vector<double> &next_y,
 	vector<vector<double> > &next_sva
 )
 {
+	double cost = 0.0;
+	unsigned int next_st = CAR_STATE[0];
+	
 	double local_car_s, s0;
 	vector<double> map_fit_waypoints_s;
 	vector<double> map_fit_waypoints_x;
@@ -763,7 +774,7 @@ void jmt_trajectory(
 	
 	double goal_d = 2.0;
 	if(car_state[3] > 8.0) {
-		goal_d = 10;
+		goal_d = 10.0;
 	}
 	else if(car_state[3] > 4.0) {
 		goal_d = 6;
@@ -772,13 +783,15 @@ void jmt_trajectory(
 	vector<double> d_goal = {goal_d, 0, 0};
 	
 	// TODO: based on cost function
-	int closing_car = get_closing_car_ahead(cars, car_state[3], car_state[0], 25);
+	//int closing_car = get_closing_car_ahead(cars, car_state[3], car_state[0], 25);
+	//cout << "jmt trajectory generation find closing car: " << closing_car << endl;
 	
 	if(CAR_STATE[0] == _CS_LCL) {
 		double td; 
 		if(get_lane_num(car_state[3], td) == CAR_STATE[1]) {
 			cout << "change LCL to KL state" << endl;
-			CAR_STATE[0] = _CS_KL;
+			next_st = _CS_KL;
+			//CAR_STATE[0] = _CS_KL;
 		} else {
 			cout << "keeping in lane change state!" << endl;
 			d_goal[0] = CAR_STATE[1]*4.0 + 2.0;
@@ -787,33 +800,39 @@ void jmt_trajectory(
 		double td; 
 		if(get_lane_num(car_state[3], td) == CAR_STATE[1]) {
 			cout << "change LCR to KL state" << endl;
-			CAR_STATE[0] = _CS_KL;
+			//CAR_STATE[0] = _CS_KL;
+			next_st = _CS_KL;
 		} else {
 			cout << "keeping in right lane change state!" << endl;
 			d_goal[0] = CAR_STATE[1]*4.0 + 2.0;
 		}
 	}
-    else if(CAR_STATE[0] == _CS_KL && closing_car > 0 && cars[closing_car].get_car_vel() < max_dist_per_step) {
+    else if(closing_car >= 0 && cars[closing_car].get_car_vel() < max_dist_per_step) {
    		double td;
     	if(safe_to_left_lane(cars, car_state[3], car_state[0])) {
     		cout << "now changing to left lane!" << endl;
     		d_goal[0] -= 4.0;
-    		CAR_STATE[0] = _CS_LCL;
+    		//CAR_STATE[0] = _CS_LCL;
+    		next_st = _CS_LCL;
     		CAR_STATE[1] = get_lane_num(d_goal[0], td);
     	}
     	else if(safe_to_right_lane(cars, car_state[3], car_state[0])) {
     		cout << "now changing to right lane!" << endl;
     		d_goal[0] += 4.0;
-    		CAR_STATE[0] = _CS_LCR;
+    		//CAR_STATE[0] = _CS_LCR;
+    		next_st = _CS_LCR;
     		CAR_STATE[1] = get_lane_num(d_goal[0], td);
     	} else {
-     		cout << "following car ahead: " << endl;
+     		cout << "following car ahead: " << closing_car << endl;
     		cars[closing_car].print();
-    		s_goal[0] = s_start[0] + cars[closing_car].get_car_vel()*num_steps - 7.5;
+    		next_st = _CS_KL_FL;
+    		s_goal[0] = s_start[0] + cars[closing_car].get_car_vel()*num_steps;
+    		s_goal[1] = cars[closing_car].get_car_vel();
 		}   	
     }
     else {
     	cout << "nothing changed, keep going!" << endl;
+    	next_st = _CS_KL;
     }
 	// end of TODO
 	
@@ -827,6 +846,12 @@ void jmt_trajectory(
 	
 	double max_acc, max_jerk;
 	max_jmt_acc_jerk(jmt_s_params, 0.02, max_acc, max_jerk);
+	if(max_acc > 9.0 || max_jerk > 10.0) {
+		cost = 1.0;
+	} else {
+		CAR_STATE[0] = next_st;
+	}
+	
 	//cout << "jmt values s: " << num_steps << " " << next_x.size() << " " << next_y.size() << endl;
 	//cout << "jmt eval d: ";
 	dump_vector(jmt_d_params);
@@ -859,6 +884,8 @@ void jmt_trajectory(
 		next_sva.push_back({s, s_v, s_a, d, d_v, d_a, xy[0], xy[1]});
 	}
 	//cout << endl;
+	
+	return cost;
 }
 
 
@@ -1078,6 +1105,11 @@ int main() {
           		//car.print();
           	}
           	//cout << endl;
+          	int closing_car = get_closing_car_ahead(cars, car_d, car_s, 30);
+          	if(closing_car > 0) {
+          		cout << "closing car: ";
+          		cars[closing_car].print();
+          	}
 
           	json msgJson;
 
@@ -1092,10 +1124,8 @@ int main() {
 				CAR_STATE = { _CS_KL, get_lane_num(car_d, td) };
 				vector<double> car_state = {car_s, 0, 0, car_d, 0, 0};
 				//jmt_trajectory_kl(car_state, num_traj_steps, next_x_vals, next_y_vals, prev_sdva);
-				jmt_trajectory(car_state, cars, num_traj_steps, next_x_vals, next_y_vals, prev_sdva);
-			} else {
-				int closing_car = get_closing_car_ahead(cars, car_s, car_d, 25);
-				
+				jmt_trajectory(car_state, cars, closing_car, num_traj_steps, next_x_vals, next_y_vals, prev_sdva);
+			} else {				
 				int idx = prev_sdva.size() - previous_path_x.size();
 				
 				cout << "idx: " << idx << " closing car: " << closing_car << endl;
@@ -1109,7 +1139,15 @@ int main() {
 					cout << prev_sdva[idx+1][6] << " " << prev_sdva[idx+1][7] << endl; */
 					
 					prev_sdva.clear();
-					jmt_trajectory(car_state, cars, num_traj_steps, next_x_vals, next_y_vals, prev_sdva);
+					double j_cost = jmt_trajectory(car_state, cars, closing_car, num_traj_steps, next_x_vals, next_y_vals, prev_sdva);
+					if(j_cost == 1.0) {
+						cout << "acceleration and jerk too high, continue old path!" << endl;
+						next_x_vals.clear(); next_y_vals.clear();
+						for(int i = 0; i < previous_path_x.size(); ++i) {
+							next_x_vals.push_back(previous_path_x[i]);
+							next_y_vals.push_back(previous_path_y[i]);
+						}
+					}
 					
 					smooth_path_with_prev( previous_path_x, previous_path_y, next_x_vals, next_y_vals);
 							
