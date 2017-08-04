@@ -137,6 +137,29 @@ void max_jmt_acc_jerk(vector<double> r, double dt, double &max_acc, double &max_
 	cout << "calculated max jert: " << max_jerk << endl;
 }
 
+void jmt_max_vaj( vector<double> r, double dt, int num_steps,
+				  double &max_vel, double &max_acc, double &max_jerk)
+{
+	double ts = 1.0/dt;
+	
+	max_vel  = r[1];
+	max_acc  = 0;
+	max_jerk = 0;
+	
+	for(int t = 1; t < num_steps; ++t) {
+		double vel = r[1] + 2*r[2]*t + 3*r[3]*pow(t, 2) + 4*r[4]*pow(t, 3) + 5*r[5]*pow(t, 4);
+		double acc = 2*r[2] + 6*r[3]*t + 12*r[4]*pow(t, 2) + 20*r[5]*pow(t, 3);
+		double jerk = 6*r[3] + 24*r[4]*t + 60*r[5]*pow(t, 2);
+		if(vel > max_vel) max_vel = vel;
+		if(fabs(acc) > max_acc) max_acc = fabs(acc);
+		if(fabs(jerk) > max_jerk) max_jerk = fabs(jerk);
+	}
+	
+	max_vel = max_vel*50;
+	max_acc = max_acc*pow(50, 2);
+	max_jerk = max_jerk*pow(50, 3);
+}
+
 double quintic_eval_s(vector<double> p, double t)
 {
 	return p[0]+p[1]*t+p[2]*pow(t,2)+p[3]*pow(t,3)+p[4]*pow(t,4)+p[5]*pow(t,5);
@@ -562,7 +585,7 @@ int get_closing_car_ahead(const vector<Car> & cars, double car_d, double car_s, 
 	int cid = -1;
 	double min_ds = check_dist;
 	
-	cout << "gcca: my car: " << car_s << " " << car_d << " " << check_dist << " " << cars.size() << endl;
+	//cout << "gcca: my car: " << car_s << " " << car_d << " " << check_dist << " " << cars.size() << endl;
 	for(int i = 0; i < nc; ++i) {
 		if(get_lane_num(car_d, td) != get_lane_num(cars[i].car_d, td)) continue;
 		
@@ -584,6 +607,32 @@ int get_closing_car_ahead(const vector<Car> & cars, double car_d, double car_s, 
 	}
 	return cid;
 }
+
+
+vector<double> get_closing_car_behind(const vector<Car> &cars, double car_d, double car_s, double dist)
+{
+	double td;
+	int cid = -1;
+	double min_d = dist;
+	
+	for(int i = 0; i < cars.size(); ++i) {
+		if(get_lane_num(car_d, td) != get_lane_num(cars[i].car_d, td)) continue;
+		
+		double d = car_s - cars[i].car_s;
+		if(d >0 && d < min_d) {
+			min_d = d;
+			cid = i;
+		}
+		else if(d < 0) {
+			d = max_s + car_s - cars[i].car_s;
+			if(d < min_d) {
+				min_d = d;
+				cid = i;
+			}
+		}
+	}
+	return {(double)cid, min_d};
+}			
 
 
 vector<Car> get_cars_in_lane_segment(const vector<Car> &cars, double car_s, double car_d, double dist)
@@ -617,7 +666,7 @@ vector<Car> get_cars_in_lane_segment(const vector<Car> &cars, double car_s, doub
 
 // check if it is safe to change to left lane, car_s and car_d is
 // current car's coord
-bool safe_to_left_lane(const vector<Car> &cars, double car_d, double car_s)
+bool safe_to_left_lane(const vector<Car> &cars, double car_d, double car_s, double car_speed)
 {
 	double td;
 	
@@ -627,10 +676,16 @@ bool safe_to_left_lane(const vector<Car> &cars, double car_d, double car_s)
 	// if there is no car in 10 meters ahead and following, saft to change lane
 	auto left_cars = get_cars_in_lane_segment(cars, car_s, car_d-4.0, 20);
 	cout << "left cars found: " << left_cars.size() << endl;
-	return left_cars.empty();
+	if(left_cars.empty()) return true;
+	
+	/* vector<double> c_idd = get_closing_car_behind(cars, car_d-4.0, car_s, 20);
+	if(c_idd[1] >= 10 && c_idd[1] < 20 && cars[int(c_idd[0])].get_car_vel() < car_speed) {
+		return true;
+	} */
+	return false;
 }
 
-bool safe_to_right_lane(const vector<Car> &cars, double car_d, double car_s)
+bool safe_to_right_lane(const vector<Car> &cars, double car_d, double car_s, double car_speed)
 {
 	double td;
 	
@@ -640,9 +695,83 @@ bool safe_to_right_lane(const vector<Car> &cars, double car_d, double car_s)
 	// if there is no car in 10 meters ahead and following, saft to change lane
 	auto left_cars = get_cars_in_lane_segment(cars, car_s, car_d+4.0, 20);
 	cout << "right cars found: " << left_cars.size() << endl;
-	return left_cars.empty();
+	if(left_cars.empty()) return true;
+	
+	/* vector<double> c_idd = get_closing_car_behind(cars, car_d+4.0, car_s, 20);
+	if(c_idd[1] >= 10 && c_idd[1] < 20 && cars[int(c_idd[0])].get_car_vel() < car_speed) {
+		return true;
+	} */
+	return false;
 }
 
+vector<double> to_local_XY(
+	const double car_x,
+	const double car_y,
+	const double car_yaw,
+	const double waypoint_x,
+	const double waypoint_y)
+{
+	vector<double> local_xy;
+
+	double theta = deg2rad(car_yaw);
+	// convert to car local coordinates
+	double dx = waypoint_x - car_x;
+	double dy = waypoint_y - car_y;
+	
+	local_xy.push_back(dx*cos(theta) + dy*sin(theta));
+	local_xy.push_back(-dx*sin(theta) + dy*cos(theta));
+	
+	return local_xy;
+}
+
+vector<double> to_world_XY(
+	const double car_x,
+	const double car_y,
+	const double car_yaw,
+	const double local_x,
+	const double local_y)
+{
+	vector<double> world_xy;
+
+	double theta = deg2rad(car_yaw);
+	// convert local xy to world coordinates
+	world_xy.push_back(local_x*cos(theta) - local_y*sin(theta) + car_x);
+	world_xy.push_back(local_x*sin(theta) + local_y*cos(theta) + car_y);
+	
+	return world_xy;
+}
+
+void smooth_XY_local_coord (
+	const double car_x,
+	const double car_y,
+	const double car_yaw,
+	vector<double> &next_x,
+	vector<double> &next_y)
+{
+	vector<double> sx;
+	vector<double> sy;
+	
+	for(int i = 0; i < next_x.size(); ++i) {
+		auto l = to_local_XY(car_x, car_y, car_yaw, next_x[i], next_y[i]);
+		sx.push_back(l[0]);
+		sy.push_back(l[1]);
+	}
+	
+	vector<double> csx = sx;
+	vector<double> csy = sy;
+	 
+	sort_coords(csx, csy);
+	
+	tk::spline spline_lxy;
+	spline_lxy.set_points(csx, csy);
+	
+	for(int i = 0; i < next_x.size(); ++i) {
+		double y = spline_lxy(sx[i]);
+		auto w_xy = to_world_XY(car_x, car_y, car_yaw, sx[i], y);
+		next_x[i] = w_xy[0];
+		next_y[i] = w_xy[1];
+	}
+}
 
 // car_start is vector of {car_s, car_speed, car_a, car_d, car_d_speed, car_d_a}
 void jmt_trajectory_kl(
@@ -728,6 +857,55 @@ void jmt_trajectory_kl(
 	//dump_vector(next_y);
 }
 
+// we know s2 is ahead of s1
+double get_s_distance(const double s1, const double s2)
+{
+	double d = s2 - s1;
+	
+	if(d < 0) {
+		d = s2 + max_s - s1;
+	}
+	return d;
+}
+
+vector<double> klfl_get_best_jmt (const double car_s, const vector<double> &car_start, const Car& car_ahead)
+{
+	vector<double>	goal;
+	vector<double>	best_jmt;
+	double 			max_acc, max_vel, max_jerk;
+	vector<double>	jmt;
+	int 			num_steps;
+	int				cost = 100000;
+	
+	cout << "evaluate klfl jmt: " << car_s << " " << car_ahead.car_s << " " << car_ahead.get_car_vel() << endl;
+	for(int i = 1; i < 10; ++i) {
+		num_steps = i*50;
+		for(int ds = 5; ds < 8; ++ds) {
+			double goal_s = car_start[0] + get_s_distance(car_s, car_ahead.car_s);
+			goal_s += car_ahead.get_car_vel()*(num_steps) - ds;
+			goal.push_back(goal_s);
+			
+			double goal_v = car_ahead.get_car_vel();
+			goal.push_back(goal_v);
+			goal.push_back(0.0);
+			cout << "goal is: " << goal_s << " " << goal_v << " 0.0" << endl;
+		
+			auto jmt_s_params = JMT(car_start, goal, num_steps);
+		
+			double max_vel, max_acc, max_jerk;
+			// we only care about the first 1 second, then will be updated
+			jmt_max_vaj(jmt_s_params, 0.02, 50, max_vel, max_acc, max_jerk);
+			double jmt_cost = max_acc/10.0 + max_jerk/10.0;
+			cout << "cost for " << num_steps << " " << ds << " is " << jmt_cost << endl;
+			if(jmt_cost < cost) {
+				cost = jmt_cost;
+				jmt = jmt_s_params;
+			}
+		}
+	}
+	return jmt;	
+}
+
 // car_start is vector of {car_s, car_speed, car_a, car_d, car_d_speed, car_d_a}
 int jmt_trajectory(
 	const vector<double> &car_state,
@@ -736,7 +914,8 @@ int jmt_trajectory(
 	int num_steps,
 	vector<double> &next_x,
 	vector<double> &next_y,
-	vector<vector<double> > &next_sva
+	vector<vector<double> > &next_sva,
+	int pidx
 )
 {
 	double cost = 0.0;
@@ -774,7 +953,7 @@ int jmt_trajectory(
 	
 	double goal_d = 2.0;
 	if(car_state[3] > 8.0) {
-		goal_d = 10.0;
+		goal_d = 9.85;
 	}
 	else if(car_state[3] > 4.0) {
 		goal_d = 6;
@@ -809,16 +988,30 @@ int jmt_trajectory(
 	}
     else if(closing_car >= 0 && cars[closing_car].get_car_vel() < max_dist_per_step) {
    		double td;
-    	if(safe_to_left_lane(cars, car_state[3], car_state[0])) {
+    	if(safe_to_left_lane(cars, car_state[3], car_state[0], car_state[2])) {
     		cout << "now changing to left lane!" << endl;
     		d_goal[0] -= 4.0;
+    		/* if(CAR_STATE[0] == _CS_KL_FL) {
+    			s_goal[1] = cars[closing_car].get_car_vel();
+    			s_goal[0] = s_start[0] + cars[closing_car].get_car_vel()*num_steps;
+    		} */
+    		//if(d_goal[0] == 2.0) {
+    		//	d_goal[0] -= 0.1;
+    		//}
     		//CAR_STATE[0] = _CS_LCL;
     		next_st = _CS_LCL;
     		CAR_STATE[1] = get_lane_num(d_goal[0], td);
     	}
-    	else if(safe_to_right_lane(cars, car_state[3], car_state[0])) {
+    	else if(safe_to_right_lane(cars, car_state[3], car_state[0], car_state[2])) {
     		cout << "now changing to right lane!" << endl;
     		d_goal[0] += 4.0;
+    		/* if(CAR_STATE[0] == _CS_KL_FL) {
+    			s_goal[1] = cars[closing_car].get_car_vel();
+    			s_goal[0] = s_start[0] + cars[closing_car].get_car_vel()*num_steps;
+    		} */
+    		//if(d_goal[0] == 10.0) {
+    		//	d_goal[0] -= 0.1;
+    		//}
     		//CAR_STATE[0] = _CS_LCR;
     		next_st = _CS_LCR;
     		CAR_STATE[1] = get_lane_num(d_goal[0], td);
@@ -826,7 +1019,11 @@ int jmt_trajectory(
      		cout << "following car ahead: " << closing_car << endl;
     		cars[closing_car].print();
     		next_st = _CS_KL_FL;
-    		s_goal[0] = s_start[0] + cars[closing_car].get_car_vel()*num_steps;
+    		//klfl_get_best_jmt(car_state[0], s_start, cars[closing_car]);
+    		//s_goal[0] = s_start[0] + cars[closing_car].get_car_vel()*num_steps;
+    		double ds = get_s_distance(car_state[0], cars[closing_car].car_s);
+    		num_steps = 150;
+    		s_goal[0] = s_start[0] + ds + cars[closing_car].get_car_vel()*num_steps - 20;
     		s_goal[1] = cars[closing_car].get_car_vel();
 		}   	
     }
@@ -844,23 +1041,39 @@ int jmt_trajectory(
 	auto jmt_s_params = JMT(s_start, s_goal, num_steps);
 	auto jmt_d_params = JMT(d_start, d_goal, num_steps);
 	
+	//double mv, macc, mjk;
+	//jmt_max_vaj(jmt_s_params, 0.02, num_steps, mv, macc, mjk);
+	//cout << "we get macc " << macc << " " << mjk << endl;
+	
 	double max_acc, max_jerk;
 	max_jmt_acc_jerk(jmt_s_params, 0.02, max_acc, max_jerk);
-	if(max_acc > 9.0 || max_jerk > 10.0) {
-		cost = 1.0;
+	if(max_acc > 9.0 || max_jerk > 9.0) {
+		//cost = 1.0;
 	} else {
 		CAR_STATE[0] = next_st;
 	}
 	
 	//cout << "jmt values s: " << num_steps << " " << next_x.size() << " " << next_y.size() << endl;
 	//cout << "jmt eval d: ";
-	dump_vector(jmt_d_params);
+	//dump_vector(jmt_d_params);
 	double previous_s = 0;
-	for(int t = 0; t < num_steps; ++t) {
+	int num_reuse = 0;
+	if(pidx > 0) num_reuse = 15;
+	double px = 0.0;
+	double py = 0.0;
+	for(int t = 0; t < num_steps/2; ++t) {	
 		double s   = quintic_eval_s(jmt_s_params, t);
 		double s_v = quintic_eval_d(jmt_s_params, t);
 		double s_a = quintic_eval_a(jmt_s_params, t);
 		
+		if(t < num_reuse) {  // reuse previous path
+			cout << "spline s is: " << s;
+			s   = next_sva[pidx+t][0] - s0;
+			if(s < 0) s += max_s;
+			cout << " reuse s is: " << s << endl;
+			s_v = next_sva[pidx+t][1];
+			s_a = next_sva[pidx+t][2];
+		}
 		
 		double d   = quintic_eval_s(jmt_d_params, t);
 		double d_v = quintic_eval_d(jmt_d_params, t);
@@ -873,15 +1086,33 @@ int jmt_trajectory(
 		
 		//auto xy = getXY(s, d_goal, map_fit_waypoints_s, map_fit_waypoints_x, map_fit_waypoints_y);
 		auto xy = getXY_splines_fit(s, d, spline_fit_sx, spline_fit_sy, spline_fit_sdx, spline_fit_sdy);
+		if(t > 0) { // check result speed
+			double dxy = distance(px, py, xy[0], xy[1]);
+			if(dxy > max_dist_per_step) {
+				cout << "fitting dist too high!, reduce s.." << dxy << endl;
+				while(dxy > max_dist_per_step) {
+					s -= 0.01;
+					xy = getXY_splines_fit(s, d, spline_fit_sx, spline_fit_sy, spline_fit_sdx, spline_fit_sdy);
+					dxy = distance(px, py, xy[0], xy[1]);
+				}
+			}
+		}
 		
 		previous_s = s;
 		
 		next_x.push_back(xy[0]);
 		next_y.push_back(xy[1]);
+		px = xy[0];
+		py = xy[1];
 		
 		s += s0;
 		if(s > max_s) s -= max_s;
-		next_sva.push_back({s, s_v, s_a, d, d_v, d_a, xy[0], xy[1]});
+		if(pidx < 0) {
+			next_sva.push_back({s, s_v, s_a, d, d_v, d_a, xy[0], xy[1]});
+		} else {
+			//cout << "t is " << t << " " << next_sva.size() << endl;
+			next_sva[t] = {s, s_v, s_a, d, d_v, d_a, xy[0], xy[1]};
+		}
 	}
 	//cout << endl;
 	
@@ -898,23 +1129,189 @@ void smooth_path_with_prev(
 {
 	double next_x, next_y;
 	
+	for(int i = 0; i < 15; i++) {
+		next_x = previous_path_x[i];
+		next_y = previous_path_y[i];
+		next_path_x[i] = next_x;
+		next_path_y[i] = next_y;
+	}
 	
-	next_x = previous_path_x[0];
-	next_y = previous_path_y[0];
-	next_path_x[0] = next_x;
-	next_path_y[0] = next_y;
-	
-	for(int i = 1; i < next_path_x.size(); ++i) {
+	/* for(int i = 15; i < next_path_x.size(); ++i) {
 		double d_x = next_path_x[i] - next_path_x[i -1];
 		double d_y = next_path_y[i] - next_path_y[i -1];
 		
 		next_x += d_x;
 		next_y += d_y;
 		
+		double s = (35 -i) / 20;
+		if(s > 0) {
+			next_x = s*previous_path_x[i]+(1-s)*next_x;
+			next_y = s*previous_path_y[i]+(1-s)*next_y;
+		}
+		
 		next_path_x[i] = next_x;
 		next_path_y[i] = next_y;
+	} */
+}
+
+// function return waypoints cross car_s for spline interpolation
+vector<double> get_waypoints_segments(
+	double car_s,
+	const  vector<double>& map_s,
+	double &local_car_s,
+	vector<int>& map_idx,
+	int num_prev,
+	int num_next
+)
+{
+	if(car_s > map_s[map_s.size()-1]) {
+		car_s = map_s[map_s.size()-1];
+	}
+
+	auto it = lower_bound(map_s.begin(), map_s.end(), car_s);
+	int idx = it - map_s.begin();
+	
+	for(int i = num_prev; i > 0; --i) {
+		map_idx.push_back((map_s.size()+idx-i) % map_s.size());
+	}
+	
+	for(int i = 0; i < num_next; ++i) {
+		map_idx.push_back((idx+i) % map_s.size());
+	}
+	
+	vector<double> local_map_waypoints_s;
+	
+	double s0 = map_s[map_idx[0]];
+	local_map_waypoints_s.push_back(0.0);
+	
+	for(int i = 1; i < map_idx.size(); ++i) {
+		double ds = map_s[map_idx[i]] - s0;
+		
+		if(ds < 0) {  // cross the end point, need special care
+			ds = map_s[map_idx[i]] + max_s - s0;
+		}
+		local_map_waypoints_s.push_back(ds);
+	}
+	
+	if(car_s < s0) {
+		local_car_s = car_s + max_s - s0;
+	} else {
+		local_car_s = car_s - s0;
+	}
+	
+	cout << "map index to fit: ";
+	dump_vector(map_idx);
+	cout << "local s: " << local_car_s << endl;
+	
+	return local_map_waypoints_s;
+}
+
+void get_waypoints_local_XY(
+	double  car_s,
+	double  car_x,
+	double  car_y,
+	double  car_d,
+	double  car_yaw,
+	vector<double> &lwy_x,
+	vector<double> &lwy_y
+)
+{
+	double d = 2.0;
+	if(car_d > 4.0) d = 6.0;
+	else if(car_d > 8.0) d = 10;
+	
+	vector<int> waypoints_ids;
+	double s_len;
+	
+	get_waypoints_segments(car_s, map_waypoints_s, s_len, waypoints_ids, 7, 18);
+	//cout << "convert way point segments: " << s_len << " ";
+	for(int i = 0; i < waypoints_ids.size(); ++i) {
+		int wi = waypoints_ids[i];
+		auto xy = to_local_XY(car_x, car_y, car_yaw, map_waypoints_x[wi]+d*map_waypoints_dx[wi],
+								map_waypoints_y[wi]+d*map_waypoints_dy[wi]);
+		lwy_x.push_back(xy[0]);
+		lwy_y.push_back(xy[1]);
+		//cout << map_waypoints_x[wi] << " " << map_waypoints_y[wi] << " " << xy[0] << " " << xy[1] << ";";
+	}
+	//cout << endl;
+}
+
+void spline_smooth_vel(double car_s, double car_d, double car_x, double car_y, double car_yaw, vector<double> &x_vals, vector<double> &y_vals)
+{
+	vector<double>	local_x;
+	vector<double>	local_y;
+	
+	int val_size = x_vals.size();
+	
+	for(int i = 0; i < x_vals.size(); ++i) {
+		vector<double> xy = to_local_XY(car_x, car_y, car_yaw, x_vals[i], y_vals[i]);
+		local_x.push_back(xy[0]);
+		local_y.push_back(xy[1]);
+	}
+
+	vector<double> local_s;
+	vector<double> t;
+	for(int i = 1; i < x_vals.size(); ++i) {
+		local_s.push_back(distance(local_x[i-1], local_y[i-1], local_x[i], local_y[i]));
+		t.push_back(double(i-1));
+	}
+
+	tk::spline  spl_s;
+	spl_s.set_points(t, local_s);
+
+	vector<double> lwy_x;
+	vector<double> lwy_y;
+	get_waypoints_local_XY(car_s, car_x, car_y, car_d, car_yaw, lwy_x, lwy_y);
+	if (lwy_x[0] > 0.) {
+		cout << "Wrong direction detected! " << car_yaw << endl;
+		car_yaw += 180;
+		get_waypoints_local_XY(car_s, car_x, car_y, car_d, car_yaw, lwy_x, lwy_y);
+	}
+	
+	tk::spline  spl_xy;
+	vector<double> lx;
+	vector<double> ly;
+	
+	if(CAR_STATE[0] == _CS_KL || CAR_STATE[1] == _CS_KL_FL) {
+		spl_xy.set_points(lwy_x, lwy_y);
+		
+		double x = 0.0;
+		for(int i = 0; i < val_size; ++i) {
+			double dx = spl_s(double(i));
+			if(dx > 0.4) dx = 0.4;
+			x += dx;
+			lx.push_back(x);
+			ly.push_back(spl_xy(x));
+		}
+	} else {
+		spl_xy.set_points(local_x, local_y);
+		
+		double x = spl_s(0.0);
+		lx.push_back(x);
+		ly.push_back(spl_xy(x));
+		for(int i = 1; i < val_size; ++i) {
+			double ds = spl_s(double(i));
+			if(ds > 0.4) ds = 0.4;
+			// find the heading angle
+			double angle = atan2(spl_xy(local_x[i]) - spl_xy(local_x[i-1]), local_x[i]-local_x[i-1]);
+			double dx = ds*cos(angle);
+			x += dx;
+			lx.push_back(x);
+			ly.push_back(spl_xy(x));
+		}
+	}
+
+	x_vals.clear();
+	y_vals.clear();
+	// convert back to global coordinates
+	for(int i = 0; i < val_size; ++i) {
+		vector<double> xy = to_world_XY(car_x, car_y, car_yaw, lx[i], ly[i]);
+		x_vals.push_back(xy[0]);
+		y_vals.push_back(xy[1]);
 	}
 }
+
+
 
 
 // function return the 3 closest map_s values to car_s
@@ -1124,22 +1521,30 @@ int main() {
 				CAR_STATE = { _CS_KL, get_lane_num(car_d, td) };
 				vector<double> car_state = {car_s, 0, 0, car_d, 0, 0};
 				//jmt_trajectory_kl(car_state, num_traj_steps, next_x_vals, next_y_vals, prev_sdva);
-				jmt_trajectory(car_state, cars, closing_car, num_traj_steps, next_x_vals, next_y_vals, prev_sdva);
+				jmt_trajectory(car_state, cars, closing_car, num_traj_steps, next_x_vals, next_y_vals, prev_sdva, -1);
+				//spline_smooth_vel(car_s, car_d, car_x, car_y, car_yaw, next_x_vals, next_y_vals);
 			} else {				
 				int idx = prev_sdva.size() - previous_path_x.size();
+				// here estimate car s and d verlocity and acceleration
+				double s_v0 = prev_sdva[idx][0];
+				double s_v1 = prev_sdva[idx+1][0];
+				double s_v2 = prev_sdva[idx+2][0];
+				double d_v0 = prev_sdva[idx][3];
+				double d_v1 = prev_sdva[idx+1][3];
+				double d_v2 = prev_sdva[idx+3][3];
 				
-				cout << "idx: " << idx << " closing car: " << closing_car << endl;
-				if(idx > 50 || closing_car > 0) {
+				double est_sv = s_v1 - s_v0;
+				double est_sa = (s_v2 - s_v1) - (s_v1 - s_v0);
+				double est_dv = d_v1 - d_v0;
+				double est_da = (d_v2 - d_v1) - (d_v1 - d_v0);
+				cout << "idx is: " << idx << endl;
+				if(idx > 50 || (closing_car > 0 && CAR_STATE[0] == _CS_KL)) {
 																		
 					vector<double> car_state = {prev_sdva[idx][0], prev_sdva[idx][1], prev_sdva[idx][2], prev_sdva[idx][3], prev_sdva[idx][4], prev_sdva[idx][5]};
-					
-					/* cout << "first prev path " << previous_path_x[0] << " " << previous_path_y[0] << endl;
-					cout << prev_sdva[idx-1][6] << " " << prev_sdva[idx-1][7] << endl;
-					cout << prev_sdva[idx][6] << " " << prev_sdva[idx][7] << " " << prev_sdva[idx][0] << " " << prev_sdva[idx][1] << endl;
-					cout << prev_sdva[idx+1][6] << " " << prev_sdva[idx+1][7] << endl; */
+					//vector<double> car_state = {car_s, prev_sdva[idx][1], prev_sdva[idx][2], car_d, prev_sdva[idx][4], prev_sdva[idx][5]};
 					
 					prev_sdva.clear();
-					double j_cost = jmt_trajectory(car_state, cars, closing_car, num_traj_steps, next_x_vals, next_y_vals, prev_sdva);
+					double j_cost = jmt_trajectory(car_state, cars, closing_car, num_traj_steps, next_x_vals, next_y_vals, prev_sdva, -1);
 					if(j_cost == 1.0) {
 						cout << "acceleration and jerk too high, continue old path!" << endl;
 						next_x_vals.clear(); next_y_vals.clear();
@@ -1148,8 +1553,15 @@ int main() {
 							next_y_vals.push_back(previous_path_y[i]);
 						}
 					}
-					
-					smooth_path_with_prev( previous_path_x, previous_path_y, next_x_vals, next_y_vals);
+					//cout << "calling spline smooth..." << car_yaw << endl;
+					//cout << "jmt trajectory: " << endl;
+					//dump_vector(next_x_vals);
+					//dump_vector(next_y_vals);
+					//spline_smooth_vel(car_s, car_d, car_x, car_y, car_yaw, next_x_vals, next_y_vals);
+					//cout << "after smooting: " << endl;
+					//dump_vector(next_x_vals);
+					//dump_vector(next_y_vals);
+					//smooth_path_with_prev( previous_path_x, previous_path_y, next_x_vals, next_y_vals);
 							
 				} else {
 					cout << "continue the trajectory" << endl;
@@ -1158,8 +1570,10 @@ int main() {
 						next_y_vals.push_back(previous_path_y[i]);
 					}
 				}
+				
+				//smooth_XY_local_coord(car_x, car_y, car_yaw, next_x_vals, next_y_vals);
 			}
-
+			
           	msgJson["next_x"] = next_x_vals;
           	msgJson["next_y"] = next_y_vals;
 
