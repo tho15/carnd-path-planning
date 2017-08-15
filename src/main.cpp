@@ -837,7 +837,7 @@ int main() {
           	}
           	//cout << endl;
           	int closing_car = get_closing_car_ahead(cars, car_d, car_s, 30);
-          	if(closing_car > 0) {
+          	if(closing_car >= 0) {
           		cout << "closing car: ";
           		cars[closing_car].print();
           	}
@@ -872,7 +872,7 @@ int main() {
 				double est_dv = d_v1 - d_v0;
 				double est_da = (d_v2 - d_v1) - (d_v1 - d_v0);
 				cout << "idx is: " << idx << endl;
-				if(idx > 50 || (closing_car > 0 && CAR_STATE[0] == _CS_KL)) {																	
+				if(idx > 50 || (closing_car >= 0 && CAR_STATE[0] == _CS_KL)) {																	
 					vector<double> car_state = {prev_sdva[idx][0], prev_sdva[idx][1], prev_sdva[idx][2], prev_sdva[idx][3], prev_sdva[idx][4], prev_sdva[idx][5]};
 					
 					//prev_sdva.clear();
